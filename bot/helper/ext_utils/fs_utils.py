@@ -192,7 +192,7 @@ async def join_files(path):
 #         await clean_target(outfile)
 #         LOGGER.error('%s. Changing metadata failed, Path %s', await listener.suproc.stderr.read().decode(), media_file)
 
-async def change_metadata(file, dirpath, key):
+async def edit_metadata(file, dirpath, key):
     LOGGER.info(f"Starting metadata modification for file: {file}")
     temp_file = f"{file}.temp.mkv"
     full_file_path = os.path.join(dirpath, file)
