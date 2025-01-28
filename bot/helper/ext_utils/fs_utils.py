@@ -10,6 +10,8 @@ from re import split as re_split, I, search as re_search
 from subprocess import run as srun
 from sys import exit as sexit
 
+import json
+
 from .exceptions import NotSupportedExtractionArchive
 from bot import bot_cache, aria2, LOGGER, DOWNLOAD_DIR, get_client, GLOBAL_EXTENSION_FILTER
 from bot.helper.ext_utils.bot_utils import sync_to_async, cmd_exec
@@ -178,13 +180,15 @@ async def join_files(path):
                 if re_search(fr"{res}\.0[0-9]+$", file_):
                     await aioremove(f'{path}/{file_}')
 
-async def edit_metadata(listener, base_dir: str, media_file: str, outfile: str, metadata: str = ''):
+async def edit_metadata(listener, base_dir: str, media_file: str, outfile: str, metadata: str = '', languages: dict = {}):
     file = media_file
     LOGGER.info(f"Starting metadata modification for file: {file}")
     temp_file = outfile
     full_file_path = media_file
     temp_file_path = outfile
     key = metadata
+    
+    # Initial command to get stream information
     cmd = [
         'ffprobe', '-hide_banner', '-loglevel', 'error', '-print_format', 'json', '-show_streams', full_file_path
     ]
@@ -201,34 +205,24 @@ async def edit_metadata(listener, base_dir: str, media_file: str, outfile: str, 
         LOGGER.error(f"No streams found in the ffprobe output: {stdout.decode().strip()}")
         return file
 
+    # New command array for modifying metadata
     cmd = [
-        bot_cache['pkgs'][2], '-y', '-i', full_file_path, '-c', 'copy',
-        '-metadata:s:v:0', f'title={key}',
-        '-metadata', f'title={key}',
-        '-metadata', 'copyright=',
-        '-metadata', 'description=',
-        '-metadata', 'license=',
-        '-metadata', 'LICENSE=',
-        '-metadata', 'author=',
-        '-metadata', 'summary=',
-        '-metadata', 'comment=',
-        '-metadata', 'artist=',
-        '-metadata', 'album=',
-        '-metadata', 'genre=',
-        '-metadata', 'date=',
-        '-metadata', 'creation_time=',
-        '-metadata', 'language=',
-        '-metadata', 'publisher=',
-        '-metadata', 'encoder=',
-        '-metadata', 'SUMMARY=',
-        '-metadata', 'AUTHOR=',
-        '-metadata', 'WEBSITE=',
-        '-metadata', 'COMMENT=',
-        '-metadata', 'ENCODER=',
-        '-metadata', 'FILENAME=',
-        '-metadata', 'MIMETYPE=',
-        '-metadata', 'PURL=',
-        '-metadata', 'ALBUM='
+        "xtra",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-i",
+        full_file_path,
+        "-map_metadata",
+        "-1",
+        "-c",
+        "copy",
+        "-metadata:s:v:0",
+        f"title={key}",
+        "-metadata",
+        f"title={key}",
     ]
 
     audio_index = 0
@@ -236,26 +230,72 @@ async def edit_metadata(listener, base_dir: str, media_file: str, outfile: str, 
     first_video = False
 
     for stream in streams:
-        stream_index = stream['index']
-        stream_type = stream['codec_type']
-        if stream_type == 'video':
+        stream_index = stream["index"]
+        stream_type = stream["codec_type"]
+
+        if stream_type == "video":
             if not first_video:
-                cmd.extend(['-map', f'0:{stream_index}'])
+                # Map the first video stream
+                cmd.extend(["-map", f"0:{stream_index}"])
                 first_video = True
-            cmd.extend([f'-metadata:s:v:{stream_index}', f'title={key}'])
-        elif stream_type == 'audio':
-            cmd.extend(['-map', f'0:{stream_index}', f'-metadata:s:a:{audio_index}', f'title={key}'])
+            # Set title metadata for video stream
+            cmd.extend([f"-metadata:s:v:{stream_index}", f"title={key}"])
+            if stream_index in languages:
+                # Set language metadata for video stream if available
+                cmd.extend(
+                    [
+                        f"-metadata:s:v:{stream_index}",
+                        f"language={languages[stream_index]}",
+                    ],
+                )
+        elif stream_type == "audio":
+            # Map audio stream
+            cmd.extend(
+                [
+                    "-map",
+                    f"0:{stream_index}",
+                    f"-metadata:s:a:{audio_index}",
+                    f"title={key}",
+                ],
+            )
+            if stream_index in languages:
+                # Set language metadata for audio stream if available
+                cmd.extend(
+                    [
+                        f"-metadata:s:a:{audio_index}",
+                        f"language={languages[stream_index]}",
+                    ],
+                )
             audio_index += 1
-        elif stream_type == 'subtitle':
-            codec_name = stream.get('codec_name', 'unknown')
-            if codec_name in ['webvtt', 'unknown']:
-                LOGGER.warning(f"Skipping unsupported subtitle metadata modification: {codec_name} for stream {stream_index}")
+        elif stream_type == "subtitle":
+            codec_name = stream.get("codec_name", "unknown")
+            if codec_name in ["webvtt", "unknown"]:
+                LOGGER.warning(
+                    f"Skipping unsupported subtitle metadata modification: {codec_name} for stream {stream_index}",
+                )
             else:
-                cmd.extend(['-map', f'0:{stream_index}', f'-metadata:s:s:{subtitle_index}', f'title={key}'])
+                # Map subtitle stream
+                cmd.extend(
+                    [
+                        "-map",
+                        f"0:{stream_index}",
+                        f"-metadata:s:s:{subtitle_index}",
+                        f"title={key}",
+                    ],
+                )
+                if stream_index in languages:
+                    # Set language metadata for subtitle stream if available
+                    cmd.extend(
+                        [
+                            f"-metadata:s:s:{subtitle_index}",
+                            f"language={languages[stream_index]}",
+                        ],
+                    )
                 subtitle_index += 1
         else:
-            cmd.extend(['-map', f'0:{stream_index}'])
-                    
+            # Map other types of streams
+            cmd.extend(["-map", f"0:{stream_index}"])
+
     cmd.append(temp_file_path)
     process = await create_subprocess_exec(*cmd, stderr=PIPE, stdout=PIPE)
     stdout, stderr = await process.communicate()
